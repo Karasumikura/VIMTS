@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 # from timm.models.vision_transformer import PatchEmbed, Block
 from .transformers.vision_transformer import Block
-from .layers.GCN import gcn
+from .layers import gcn, ST_HGNN_Layer
 from .util import IMTS_PatchEmbed
 from .pos_embed import get_2d_sincos_pos_embed_for_seq
 import einops
@@ -97,30 +97,31 @@ class MaskedAutoencoderViT(nn.Module):
             self.supports = []
    
         # Node embeddings for dynamic support
-        self.nodevec1 = nn.Parameter(torch.randn(N, nodevec_dim).cuda(), requires_grad=True)
-        self.nodevec2 = nn.Parameter(torch.randn(nodevec_dim, N).cuda(), requires_grad=True)
+        # self.nodevec1 = nn.Parameter(torch.randn(N, nodevec_dim).cuda(), requires_grad=True)
+        # self.nodevec2 = nn.Parameter(torch.randn(nodevec_dim, N).cuda(), requires_grad=True)
         
-        self.nodevec_linear1 = nn.ModuleList()
-        self.nodevec_linear2 = nn.ModuleList()
-        self.nodevec_gate1 = nn.ModuleList()
-        self.nodevec_gate2 = nn.ModuleList()
-        for _ in range(self.n_layer):   
-            self.nodevec_linear1.append(nn.Linear(hid_dim, nodevec_dim))
-            self.nodevec_linear2.append(nn.Linear(hid_dim, nodevec_dim))
-            self.nodevec_gate1.append(nn.Sequential(
-				nn.Linear(hid_dim+nodevec_dim, 1),
-				nn.Tanh(),
-				nn.ReLU()))
-            self.nodevec_gate2.append(nn.Sequential(
-				nn.Linear(hid_dim+nodevec_dim, 1),
-				nn.Tanh(),
-				nn.ReLU()))
+        # self.nodevec_linear1 = nn.ModuleList()
+        # self.nodevec_linear2 = nn.ModuleList()
+        # self.nodevec_gate1 = nn.ModuleList()
+        # self.nodevec_gate2 = nn.ModuleList()
+        # for _ in range(self.n_layer):   
+        #     self.nodevec_linear1.append(nn.Linear(hid_dim, nodevec_dim))
+        #     self.nodevec_linear2.append(nn.Linear(hid_dim, nodevec_dim))
+        #     self.nodevec_gate1.append(nn.Sequential(
+        # 		nn.Linear(hid_dim+nodevec_dim, 1),
+        # 		nn.Tanh(),
+        # 		nn.ReLU()))
+        #     self.nodevec_gate2.append(nn.Sequential(
+        # 		nn.Linear(hid_dim+nodevec_dim, 1),
+        # 		nn.Tanh(),
+        # 		nn.ReLU()))
 
         self.supports_len +=1
 
         self.gnn_layers = nn.ModuleList() # gragh conv
         for _ in range(self.n_layer):
-            self.gnn_layers.append(gcn(hid_dim, hid_dim, 0, support_len=self.supports_len, order=gcn_config['hop']))
+            # self.gnn_layers.append(gcn(hid_dim, hid_dim, 0, support_len=self.supports_len, order=gcn_config['hop']))
+            self.gnn_layers.append(ST_HGNN_Layer(hid_dim, hid_dim, k_neighbors=10, n_clusters=10))
         
         # --------------------------------------------------------------------------
 
@@ -271,19 +272,20 @@ class MaskedAutoencoderViT(nn.Module):
         x_start = x.clone()
         for layer in range(self.n_layer):
             gnn = self.gnn_layers[layer]
-            nodevec1 = self.nodevec1.view(1, 1, N, self.nodevec_dim).repeat(B, M, 1, 1)
-            nodevec2 = self.nodevec2.view(1, 1, self.nodevec_dim, N).repeat(B, M, 1, 1)
-            x_gate1 = self.nodevec_gate1[layer](torch.cat([x, nodevec1.permute(0, 2, 1, 3)], dim=-1))
-            x_gate2 = self.nodevec_gate2[layer](torch.cat([x, nodevec2.permute(0, 3, 1, 2)], dim=-1))
-            x_p1 = x_gate1 * self.nodevec_linear1[layer](x) # (B, M, N, 10)
-            x_p2 = x_gate2 * self.nodevec_linear2[layer](x) # (B, M, N, 10)
-            nodevec1 = nodevec1 + x_p1.permute(0,2,1,3) # (B, M, N, 10)
-            nodevec2 = nodevec2 + x_p2.permute(0,2,3,1) # (B, M, 10, N)
+            x = gnn(x)
+            # nodevec1 = self.nodevec1.view(1, 1, N, self.nodevec_dim).repeat(B, M, 1, 1)
+            # nodevec2 = self.nodevec2.view(1, 1, self.nodevec_dim, N).repeat(B, M, 1, 1)
+            # x_gate1 = self.nodevec_gate1[layer](torch.cat([x, nodevec1.permute(0, 2, 1, 3)], dim=-1))
+            # x_gate2 = self.nodevec_gate2[layer](torch.cat([x, nodevec2.permute(0, 3, 1, 2)], dim=-1))
+            # x_p1 = x_gate1 * self.nodevec_linear1[layer](x) # (B, M, N, 10)
+            # x_p2 = x_gate2 * self.nodevec_linear2[layer](x) # (B, M, N, 10)
+            # nodevec1 = nodevec1 + x_p1.permute(0,2,1,3) # (B, M, N, 10)
+            # nodevec2 = nodevec2 + x_p2.permute(0,2,3,1) # (B, M, 10, N)
 
-            adp = F.softmax(F.relu(torch.matmul(nodevec1, nodevec2)), dim=-1) # (B, M, N, N) used
-            new_supports = self.supports + [adp]
-            x = gnn(x.permute(0,3,1,2), new_supports)
-            x = x.permute(0, 2, 3, 1) # (B, N, M, F)
+            # adp = F.softmax(F.relu(torch.matmul(nodevec1, nodevec2)), dim=-1) # (B, M, N, N) used
+            # new_supports = self.supports + [adp]
+            # x = gnn(x.permute(0,3,1,2), new_supports)
+            # x = x.permute(0, 2, 3, 1) # (B, N, M, F)
         x = x + x_start
         x = torch.cat((x_start,x), dim=-1)
         x = x.reshape(BN, M, -1)
